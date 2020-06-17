@@ -1,0 +1,176 @@
+A dynamically linked library is a compiled binary that is linked at runtime to the main process executable.
+Windows platforms these binaries are called dynamic link libraries (DLL), and on Linux they are called 
+shared objects (SO). In both cases, these binaries expose functions through exported names, which get 
+resolved to actual addresses in memory.
+
+There are three different ways to load dynamic libraries in ctypes: cdll(), windll(), and oledll(). 
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C Type                      ctypes Type
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+char                        c_char
+wchar_t                     c_wchar
+char                        c_byte
+char                        c_ubyte
+short                       c_short
+unsigned short              c_ushort
+int                         c_int
+unsigned int                c_uint
+long                        c_long
+unsigned long               c_ulong
+long long                   c_longlong
+unsigned long long          c_ulonglong
+float                       c_float
+double                      c_double
+char *(NULL terminated)     c_char_p
+wchar_t *(NULL terminated)  c_wchar_p
+void *                      c_void_p
+
+When a function expects a pointer as a parameter, you call it like this: function_main( byref(parameter) ). 
+
+Debuggers are the apple of the hacker’s eye. Debuggers enable you to perform runtime tracing of a process, 
+or dynamic analysis. 
+
+-------------------
+Breakpoints
+--------------------
+Soft Breakpoints
+
+In order to set a soft breakpoint at this address and halt the CPU, we have to swap out a single byte from 
+the 2-byte 8BC3 opcode.
+
+Opcode Before Breakpoint is Set
+0x44332211:      8BC3          MOV EAX, EBX
+
+Modified Opcode After Beakpoint is Set
+0x44332211:     CCC3          MOV EAX, EBX
+
+You can see that we have swapped out the 8B byte and replaced it with a CC byte. 
+two types of soft breakpoints that can be set: 
+ I.  one-shot breakpoints
+ II. persistent breakpoints.
+
+ A one-shot soft breakpoint means that once the breakpoint is hit, it gets removed from the internal breakpoint 
+ list; it’s good for only one hit.
+
+ A persistent breakpoint gets restored after the CPU has executed the original opcode, and so the entry in the 
+ breakpoint list is maintained.
+
+Soft breakpoints have one caveat, however: when you change a byte of the executable in memory, you change the 
+running software’s cyclic redundancy check (CRC) checksum.
+
+ If the checksum is different from the checksum that is stored for validation, the CRC check fails. This is 
+ important to note, as quite often malware will test its running code in memory for any CRC changes and will 
+ kill itself if a failure is detected.
+
+This is a very effective technique to slow reverse engineering and prevent the use of soft breakpoints, thus 
+limiting dynamic analysis of its behavior.
+
+
+Hardware Breakpoints
+~~~~~~~~~~~~~~~~~~~~~
+This style of breakpoint is set at the CPU level,in special registers called "debug registers".
+8 debug registers (DR0-DR7)
+DR0-DR3 :- Reserved for the address of the breakpoints(can use only upto 4 hardware breakpoints at a time)
+DR4 & DR5 :- Reserved
+DR6 :- used as status registers,which determines the type of debugging event triggered by the breakpoint once it's hit.
+DR7 :- essentially the on/off switch for the Hardware breakpoints and stores the different breakpoint conditions.
+
+'
+By setting specific flags in the DR7 register, you can create breakpoints for the following conditions:
+1> Break when an instruction is executed at a particular address.
+2> Break when data is written to an address.
+3> Break on reads or writes to an address but not execution.
+
+Layout of DR7 register
+| L | G | L | G | L | G | L | G |       | Type | Len | Type | Len | Type | Len | Type | Len |
+---------------------------------------------------------------------------------------------
+| D | D | D | D | D | D | D | R |       |  DR  |  DR |  DR  |  DR |  DR  |  DR |  DR  |  DR |
+| R | R | R | R | R | R | D | R |       |   O  |   O |   1  |   1 |   2  |   2 |   3  |   3 |
+| 0 | 0 | 1 | 1 | 2 | 2 | 3 | 3 |       |      |     |      |     |      |     |      |     |
+---------------------------------------------------------------------------------------------
+| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |       |16-17 |18-19|20-21 |22-23|24-25 |26-27|28-29 |30-31| <- Bits 
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Breakpoint Flags                                        Breakpoint Length Flags
+--------------------------------------------------------------------------------
+00 – Break on execution                                 00 – 1 byte 
+01 – Break on data writes                               01 – 2 bytes (WORD) 
+11 – Break on reads or writes but not execution         11 – 4 bytes (DWORD)
+
+Unlike soft breakpoints, which use the INT3 event, hardware breakpoints use interrupt 1 (INT1).
+Single-step simply means going one-by-one through instructions, allowing you to very closely inspect 
+critical sections of code while monitoring data changes.
+
+#### Memory Breakpoints ####
+They aren't really a breakpoints at all. '
+
+
+########################################################
+Building a Windows Debuggers
+########################################################
+Differences b/w opening a process and Attaching to a process:-
+The advantage of opening a process is that you have control of the process before it has a chance 
+to run any code. This can be handy when analyzing malware or other types of malicious code.
+
+Attaching to a process merely breaks into an already running process, which allows you to skip the
+startup portion of the code and analyze specific areas of code that you are interested in.
+
+A CreateProcessA() looks like :-
+
+BOOL WINAPI CreateProcessA(    
+    LPCSTR lpApplicationName,    
+    LPTSTR lpCommandLine,    
+    LPSECURITY_ATTRIBUTES lpProcessAttributes,    
+    LPSECURITY_ATTRIBUTES lpThreadAttributes,    
+    BOOL bInheritHandles,    
+    DWORD dwCreationFlags,    
+    LPVOID lpEnvironment,    
+    LPCTSTR lpCurrentDirectory,    
+    LPSTARTUPINFO lpStartupInfo,    
+    LPPROCESS_INFORMATION lpProcessInformation 
+);
+
+important parameters are:-
+lpApplicationName   } \_  used for setting the path to 
+lpCommandLine       } /-  the executable we wish to run and any command line arguments .
+dwCreationFlags     }      takes a special value that indicates that the process should be started as a 
+                            debugged process
+lpStartupInfo           } \_    the two are pointers to structs that dicatate how the process      
+lpProcessInformation    } /-    should be started as well as provide important information regarding the
+                                process after it has been successfully started.
+
+To know we can access the process before we attempt to debug it.
+This is done with OpenProcess() which is exported from kernel32.dll and has the following prototype:-
+
+HANDLE WINAPI OpenProcess(
+    DWORD dwDesiredAccess ,
+    BOOL bInheritHandle ,
+    DWORD dwProcessId
+)
+
+dwDesiredAccess :- indicates what type of access rights we are requesting for the process object we wish
+                    to obtain a handle to.In order to perform debugging we have to set it to PROCESS_ALL_ACCESS.
+
+bInheritHandle  :- it will always be set to False for our purposes
+
+dwProcessId     :- It is simply the PID of the process we wish to handle to.
+
+To attach a process we use DebugActiveProcess() function,which looks like this :-
+
+BOOL WINAPI DebugActiveProcess(
+    DWORD dwProcessId
+);
+we simply pass it the PID of the process we wish to attach to.
+Once the system determines that we have appropriate rights to access the process, the target process 
+assumes that the attaching process(the debugger) is ready to handle debug events and it relinquishes to the debugger.
+
+The debugger traps these debugging events by calling WaitForDebugEvent() in a loop.
+
+BOOL WINAPI WaitForDebugEvent(
+    LPDEBUG_EVENT lpDebugEvent,
+    DWORD dwMilliseconds
+);
+1st parameter :- it is a pointer to the DEBUG_EVENT structs
+2nd parameter :- we will set to INFINITE so that the WaitForDebugEvent() call doesn't return until an event occurs
+
